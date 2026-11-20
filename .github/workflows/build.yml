@@ -1,0 +1,32 @@
+name: Build and test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
+      - name: Build and test
+        run: >-
+          xcodebuild
+          -project Hamaster.xcodeproj
+          -scheme Hamaster
+          -destination 'platform=macOS'
+          -derivedDataPath "$RUNNER_TEMP/HamasterDerivedData"
+          CODE_SIGNING_ALLOWED=NO
+          test

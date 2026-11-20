@@ -1,0 +1,70 @@
+name: Release
+
+on:
+  push:
+    tags: ['v[0-9]*.[0-9]*.[0-9]*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag to release (for example v1.0.0)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-15
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          persist-credentials: false
+      - name: Validate version
+        shell: bash
+        run: |
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
+          git show-ref --verify "refs/tags/$RELEASE_TAG"
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
+      - name: Test
+        run: >-
+          xcodebuild -project Hamaster.xcodeproj -scheme Hamaster
+          -destination 'platform=macOS'
+          -derivedDataPath "$RUNNER_TEMP/HamasterTests"
+          CODE_SIGNING_ALLOWED=NO test
+      - name: Package universal app
+        env:
+          HAMASTER_BUILD_DIR: ${{ runner.temp }}/HamasterRelease
+        run: scripts/package-release.sh "${RELEASE_TAG#v}"
+      - name: Publish release assets
+        shell: bash
+        run: |
+          cat > "$RUNNER_TEMP/release-notes.md" <<'NOTES'
+          Download the universal ZIP for Apple Silicon and Intel Macs running macOS 13 or later.
+          Unzip and move Hamaster.app into Applications, then grant the requested permissions.
+
+          This free community build is ad-hoc signed, not Developer ID signed or notarized.
+          macOS may block its first launch. After attempting to open it, use System Settings →
+          Privacy & Security → Open Anyway if you trust this build. No signing secrets are used.
+
+          A SHA-256 checksum is included alongside the ZIP.
+          NOTES
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" dist/* --clobber
+          else
+            gh release create "$RELEASE_TAG" dist/* --verify-tag \
+              --title "Hamaster ${RELEASE_TAG#v}" --notes-file "$RUNNER_TEMP/release-notes.md"
+          fi
